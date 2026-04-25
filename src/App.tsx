@@ -210,6 +210,7 @@ async function callClaude(messages, system) {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
       "anthropic-beta": "interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
       "x-api-key": apiKey,
     },
     body: JSON.stringify({
@@ -234,6 +235,7 @@ async function callClaudePDF(b64, prompt, system) {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
       "anthropic-beta": "interleaved-thinking-2025-05-14",
+      "anthropic-dangerous-direct-browser-access": "true",
       "x-api-key": apiKey,
     },
     body: JSON.stringify({
