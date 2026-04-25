@@ -209,13 +209,20 @@ async function callClaude(messages, system) {
     headers: {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "interleaved-thinking-2025-05-14",
       "x-api-key": apiKey,
     },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500, system, messages })
+    body: JSON.stringify({
+      model: "claude-opus-4-7",
+      max_tokens: 16000,
+      thinking: { type: "enabled", budget_tokens: 10000 },
+      system,
+      messages,
+    })
   });
   const d = await res.json();
   if (d.error) throw new Error(d.error.message);
-  return d.content.map(b => b.text || '').join('');
+  return d.content.filter(b => b.type === "text").map(b => b.text || '').join('');
 }
 
 async function callClaudePDF(b64, prompt, system) {
@@ -226,13 +233,20 @@ async function callClaudePDF(b64, prompt, system) {
     headers: {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "interleaved-thinking-2025-05-14",
       "x-api-key": apiKey,
     },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, system, messages: [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: prompt }] }] })
+    body: JSON.stringify({
+      model: "claude-opus-4-7",
+      max_tokens: 16000,
+      thinking: { type: "enabled", budget_tokens: 10000 },
+      system,
+      messages: [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: prompt }] }],
+    })
   });
   const d = await res.json();
   if (d.error) throw new Error(d.error.message);
-  return d.content.map(b => b.text || '').join('');
+  return d.content.filter(b => b.type === "text").map(b => b.text || '').join('');
 }
 
 const BG = "var(--color-background-tertiary)";
@@ -1065,6 +1079,7 @@ function Review({ topics, onUpdate }) {
   const [idx, setIdx] = useState(0);
   const [showAns, setShowAns] = useState(false);
   const [writtenAnswer, setWrittenAnswer] = useState("");
+  const [selectedOption, setSelectedOption] = useState(null);
   const [stats, setStats] = useState({ correct: 0, wrong: 0 });
   const studied = topics.filter(t => t.studied && (t.questions || []).length > 0);
   const today = todayStr();
@@ -1087,7 +1102,7 @@ function Review({ topics, onUpdate }) {
     });
     cs.sort(() => Math.random() - 0.5);
     if (cs.length === 0) { alert("No hay preguntas pendientes."); return; }
-    setCards(cs); setIdx(0); setShowAns(false); setWrittenAnswer(""); setStats({ correct: 0, wrong: 0 }); setMode("session");
+    setCards(cs); setIdx(0); setShowAns(false); setWrittenAnswer(""); setSelectedOption(null); setStats({ correct: 0, wrong: 0 }); setMode("session");
   }
 
   function answer(correct) {
@@ -1096,7 +1111,7 @@ function Review({ topics, onUpdate }) {
     if (t) { const upd = scheduleQuestion(c, correct); onUpdate(t.id, { questions: (t.questions || []).map(q => q.id === c.id ? { ...q, ...upd } : q) }); }
     setStats({ correct: stats.correct + (correct ? 1 : 0), wrong: stats.wrong + (correct ? 0 : 1) });
     if (idx + 1 >= cards.length) setMode("results");
-    else { setIdx(idx + 1); setShowAns(false); setWrittenAnswer(""); }
+    else { setIdx(idx + 1); setShowAns(false); setWrittenAnswer(""); setSelectedOption(null); }
   }
 
   if (mode === "picker") {
@@ -1188,9 +1203,9 @@ function Review({ topics, onUpdate }) {
         <div style={{ marginBottom: 10 }}><span style={tag(isCard ? BLUE : GREEN)}>{isCard ? "🃏 Tarjeta" : "📝 Test"}</span></div>
         <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 20, lineHeight: 1.6, color: TEXT }}>{c.q}</div>
         {!showAns ? (
-          <div style={{ textAlign: "center" }}>
+          <div>
             {isCard ? (
-              <div>
+              <div style={{ textAlign: "center" }}>
                 <p style={{ fontSize: 12, color: MUTED, marginBottom: 10, fontStyle: "italic" }}>Escribe tu respuesta y luego comparala con la tarjeta.</p>
                 <textarea
                   style={{ ...inp, minHeight: 110, resize: "vertical", marginBottom: 14, textAlign: "left" }}
@@ -1201,7 +1216,20 @@ function Review({ topics, onUpdate }) {
                 <button style={{ ...btn(ACCENT), padding: "10px 24px" }} onClick={() => setShowAns(true)}>Comparar respuesta</button>
               </div>
             ) : (
-              <button style={{ ...btn(ACCENT), padding: "10px 24px" }} onClick={() => setShowAns(true)}>Ver respuesta</button>
+              <div>
+                <p style={{ fontSize: 12, color: MUTED, marginBottom: 10, fontStyle: "italic" }}>Selecciona la respuesta que creas correcta y luego revela.</p>
+                {(c.options || []).map((opt, i) => {
+                  const sel = selectedOption === i;
+                  return (
+                    <div key={i} onClick={() => setSelectedOption(i)} style={{ background: sel ? ACCENT + "20" : BG, border: `0.5px solid ${sel ? ACCENT : BORDER}`, borderRadius: 8, padding: "10px 14px", marginBottom: 7, fontSize: 13, cursor: "pointer", color: sel ? ACCENT : TEXT, fontWeight: sel ? 500 : 400 }}>
+                      {String.fromCharCode(65 + i)}) {opt}
+                    </div>
+                  );
+                })}
+                <div style={{ textAlign: "center", marginTop: 14 }}>
+                  <button style={{ ...btn(ACCENT), padding: "10px 24px" }} onClick={() => setShowAns(true)}>Revelar respuesta</button>
+                </div>
+              </div>
             )}
           </div>
         ) : (
@@ -1220,13 +1248,20 @@ function Review({ topics, onUpdate }) {
                 </div>
               </div>
             ) : (
-              (c.options || []).map((opt, i) => (
-                <div key={i} style={{ background: i === c.correct ? GREEN + "20" : BG, border: `0.5px solid ${i === c.correct ? GREEN : BORDER}`, borderRadius: 8, padding: "8px 14px", marginBottom: 7, fontSize: 13, color: i === c.correct ? GREEN : MUTED }}>
-                  {i === c.correct ? "✓" : "—"} {String.fromCharCode(65 + i)}) {opt}
-                </div>
-              ))
+              <div>
+                {(c.options || []).map((opt, i) => {
+                  const isCorrect = i === c.correct;
+                  const isSelected = i === selectedOption;
+                  const wrongSelected = isSelected && !isCorrect;
+                  return (
+                    <div key={i} style={{ background: isCorrect ? GREEN + "20" : wrongSelected ? RED + "20" : BG, border: `0.5px solid ${isCorrect ? GREEN : wrongSelected ? RED : BORDER}`, borderRadius: 8, padding: "8px 14px", marginBottom: 7, fontSize: 13, color: isCorrect ? GREEN : wrongSelected ? RED : MUTED, fontWeight: isCorrect || isSelected ? 500 : 400 }}>
+                      {isCorrect ? "✓" : isSelected ? "✗" : "—"} {String.fromCharCode(65 + i)}) {opt}
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            <p style={{ fontSize: 12, color: MUTED, textAlign: "center", marginBottom: 10 }}>¿La sabías?</p>
+            <p style={{ fontSize: 12, color: MUTED, textAlign: "center", marginBottom: 10, marginTop: 14 }}>¿La sabías?</p>
             <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
               <button style={{ ...btn(RED), padding: "10px 28px", fontSize: 15 }} onClick={() => answer(false)}>✗ No la sabía</button>
               <button style={{ ...btn(GREEN), padding: "10px 28px", fontSize: 15 }} onClick={() => answer(true)}>✓ La sabía</button>
