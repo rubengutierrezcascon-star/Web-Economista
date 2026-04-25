@@ -201,18 +201,23 @@ function applyStudiedPreset(topics) {
   });
 }
 
-async function callClaude(messages, system) {
+const ANTHROPIC_HEADERS = {
+  "Content-Type": "application/json",
+  "anthropic-version": "2023-06-01",
+  "anthropic-dangerous-direct-browser-access": "true",
+};
+
+function getApiKey() {
   const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Falta VITE_ANTHROPIC_API_KEY. Para produccion conviene mover estas llamadas a un backend.");
+  return apiKey;
+}
+
+// Opus 4.7 + extended thinking — solo para el chat de estudio
+async function callClaude(messages, system) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "interleaved-thinking-2025-05-14",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "x-api-key": apiKey,
-    },
+    headers: { ...ANTHROPIC_HEADERS, "anthropic-beta": "interleaved-thinking-2025-05-14", "x-api-key": getApiKey() },
     body: JSON.stringify({
       model: "claude-opus-4-7",
       max_tokens: 16000,
@@ -226,29 +231,33 @@ async function callClaude(messages, system) {
   return d.content.filter(b => b.type === "text").map(b => b.text || '').join('');
 }
 
-async function callClaudePDF(b64, prompt, system) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("Falta VITE_ANTHROPIC_API_KEY. Para produccion conviene mover estas llamadas a un backend.");
+// Sonnet 4.6 — para tareas rutinarias: esquemas, conexiones, cobertura
+async function callClaudeFast(messages, system) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "interleaved-thinking-2025-05-14",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "x-api-key": apiKey,
-    },
+    headers: { ...ANTHROPIC_HEADERS, "x-api-key": getApiKey() },
+    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, system, messages })
+  });
+  const d = await res.json();
+  if (d.error) throw new Error(d.error.message);
+  return d.content.map(b => b.text || '').join('');
+}
+
+// Sonnet 4.6 — para extracción de PDFs
+async function callClaudePDF(b64, prompt, system) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { ...ANTHROPIC_HEADERS, "x-api-key": getApiKey() },
     body: JSON.stringify({
-      model: "claude-opus-4-7",
-      max_tokens: 16000,
-      thinking: { type: "enabled", budget_tokens: 10000 },
+      model: "claude-sonnet-4-6",
+      max_tokens: 4000,
       system,
       messages: [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: prompt }] }],
     })
   });
   const d = await res.json();
   if (d.error) throw new Error(d.error.message);
-  return d.content.filter(b => b.type === "text").map(b => b.text || '').join('');
+  return d.content.map(b => b.text || '').join('');
 }
 
 const BG = "var(--color-background-tertiary)";
@@ -711,7 +720,7 @@ function TopicDetail({ topic, topics, connections, onUpdate, onBack }) {
         resumen: `Resumen ejecutivo para oposición:\n\n${ac.substring(0, 6000)}`,
         conceptos: `12 conceptos clave con definición y relevancia:\n\n${ac.substring(0, 6000)}`
       };
-      const result = await callClaude([{ role: "user", content: prompts[type] }], `Experto en TCEE, ${topic.name}.`);
+      const result = await callClaudeFast([{ role: "user", content: prompts[type] }], `Experto en TCEE, ${topic.name}.`);
       const schema = { id: Date.now().toString(), type, title: `${type} — ${topic.name}`, content: result, date: todayStr() };
       onUpdate(topic.id, { schemas: [...(topic.schemas || []), schema] });
     } catch (err) { alert("Error: " + err.message); }
@@ -754,7 +763,7 @@ function TopicDetail({ topic, topics, connections, onUpdate, onBack }) {
     try {
       const qt = topic.questions.map((q, i) => `${i + 1}. ${q.q}`).join("\n");
       const prompt = `Analiza cobertura de preguntas respecto al temario.\n\nTEMARIO:\n${ac.substring(0, 8000)}\n\nPREGUNTAS:\n${qt}\n\nResponde SOLO JSON:\n{"percentage": 65, "covered": ["C1"], "uncovered": ["C4"], "recommendation": "Sugerencia"}`;
-      const r = await callClaude([{ role: "user", content: prompt }], "Responde SIEMPRE con JSON válido.");
+      const r = await callClaudeFast([{ role: "user", content: prompt }], "Responde SIEMPRE con JSON válido.");
       const parsed = JSON.parse(r.replace(/```json|```/g, "").trim());
       onUpdate(topic.id, { coverage: { ...parsed, date: todayStr() } });
     } catch (err) { alert("Error: " + err.message); }
@@ -1484,7 +1493,7 @@ function Connections({ topics, connections, saveConnections }) {
     try {
       const list = topics.filter(t => t.id !== topic.id).map(t => `${t.number}. ${t.name.substring(0, 80)}`).join("\n");
       const prompt = `Para "${topic.name}" de TCEE, identifica 5-8 conexiones con otros temas del temario.\n\nTEMAS:\n${list}\n\nResponde SOLO JSON:\n[{"toNumber": 6, "description": "Explicación 1-2 frases"}]`;
-      const result = await callClaude([{ role: "user", content: prompt }], "Experto TCEE. Responde SIEMPRE JSON válido.");
+      const result = await callClaudeFast([{ role: "user", content: prompt }], "Experto TCEE. Responde SIEMPRE JSON válido.");
       const parsed = JSON.parse(result.replace(/```json|```/g, "").trim());
       const newConnections = parsed.map(c => ({ id: `${Date.now()}_${c.toNumber}_${Math.random().toString(36).substr(2, 5)}`, fromNumber: topic.number, toNumber: c.toNumber, description: c.description, auto: true, date: todayStr() })).filter(c => topics.some(t => t.number === c.toNumber));
       saveConnections([...connections, ...newConnections]);
